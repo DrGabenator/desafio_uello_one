@@ -1,26 +1,39 @@
 package com.example.desafiouelloone.viewmodel
 
 import android.annotation.SuppressLint
+import android.app.Application
 import android.location.Location
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.desafiouelloone.data.db.MarkersDatabase
 import com.example.desafiouelloone.data.models.MarkerEntity
 import com.example.desafiouelloone.data.repository.MarkerRepository
-import com.google.android.gms.location.FusedLocationProviderClient
-import com.google.android.gms.location.LocationCallback
-import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.*
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.Marker
+import com.google.android.gms.maps.model.MarkerOptions
 import kotlinx.coroutines.launch
 import java.text.DecimalFormat
 
-class MapsViewModel(private val markerRepository: MarkerRepository) : ViewModel() {
+class MapsViewModel(application: Application) : AndroidViewModel(application) {
     private val _markers = MutableLiveData<List<MarkerEntity>>()
     val markers: LiveData<List<MarkerEntity>> get() = _markers
+
+    private var markerRepository: MarkerRepository
+
+    private var mutableMarkers: MutableList<Marker> = mutableListOf()
+
+    private val defaultZoom = 15f
+
+    init {
+        val database = MarkersDatabase.getInstance(application)
+        val markerDao = database.markerDao()
+        markerRepository = MarkerRepository(markerDao)
+    }
 
     @SuppressLint("MissingPermission")
     fun startLocationUpdates(
@@ -66,10 +79,19 @@ class MapsViewModel(private val markerRepository: MarkerRepository) : ViewModel(
         }
     }
 
-    fun centerMapToUserLocation(map: GoogleMap, userLocationMarker: Marker?, defaultZoom: Float) {
+    fun centerMapToUserLocation(map: GoogleMap, userLocationMarker: Marker?) {
         userLocationMarker?.position?.let { latLng ->
             map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, defaultZoom))
         }
+    }
+
+    fun clearMarkers() {
+        for (marker in mutableMarkers) {
+            marker.remove()
+        }
+        mutableMarkers.clear()
+
+        deleteAllMarkers()
     }
 
     fun calculateDistance(startLatLng: LatLng, endLatLng: LatLng): Float {
@@ -82,6 +104,51 @@ class MapsViewModel(private val markerRepository: MarkerRepository) : ViewModel(
             results
         )
         return results[0]
+    }
+
+    fun onMapLongClick(latLng: LatLng, userLocationMarker: Marker?, map: GoogleMap) {
+        val latitude = latLng.latitude
+        val longitude = latLng.longitude
+
+        val userLocation = userLocationMarker?.position
+        val distance = userLocation?.let { calculateDistance(latLng, it) }
+        val distanceSnippet =
+            distance?.let { "Distância: ${convertMetersToKilometers(it)} km" } ?: ""
+
+        val markerOptions = MarkerOptions()
+            .position(latLng)
+            .title("Marcador")
+            .snippet("Latitude: $latitude, Longitude: $longitude\n$distanceSnippet")
+        val mapMarker = map.addMarker(markerOptions)
+        if (mapMarker != null) {
+            this.mutableMarkers.add(mapMarker)
+            mapMarker.showInfoWindow()
+        }
+
+        val markerEntity = MarkerEntity(
+            latitude = latLng.latitude,
+            longitude = latLng.longitude,
+            distance = distance ?: 0f
+        )
+        insertMarker(markerEntity)
+    }
+
+    fun addSavedMarkersToMap(markers: List<MarkerEntity>, map: GoogleMap) {
+        for (marker in markers) {
+            val latLng = LatLng(marker.latitude, marker.longitude)
+            val distanceSnippet =
+                "Distância: ${convertMetersToKilometers(marker.distance)} km"
+            val markerOptions = MarkerOptions()
+                .position(latLng)
+                .title("Marcador")
+                .snippet(
+                    "Latitude: ${latLng.latitude}, Longitude: ${latLng.longitude}\n$distanceSnippet"
+                )
+            val mapMarker = map.addMarker(markerOptions)
+            if (mapMarker != null) {
+                this.mutableMarkers.add(mapMarker)
+            }
+        }
     }
 
     fun convertMetersToKilometers(meters: Float): String? {

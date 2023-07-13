@@ -11,12 +11,8 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Observer
 import androidx.lifecycle.ViewModelProvider
 import com.example.desafiouelloone.R
-import com.example.desafiouelloone.data.db.MarkersDatabase
-import com.example.desafiouelloone.data.models.MarkerEntity
-import com.example.desafiouelloone.data.repository.MarkerRepository
 import com.example.desafiouelloone.databinding.ActivityMapsBinding
 import com.example.desafiouelloone.viewmodel.MapsViewModel
 import com.example.desafiouelloone.viewmodel.MapsViewModelFactory
@@ -43,12 +39,7 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
 
-    private lateinit var markerRepository: MarkerRepository
-
     private var userLocationMarker: Marker? = null
-    private var markers: MutableList<Marker> = mutableListOf()
-
-    private val defaultZoom = 15f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,32 +49,26 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as SupportMapFragment
         mapFragment.getMapAsync(this)
 
-        val database = MarkersDatabase.getInstance(this)
-        val markerDao = database.markerDao()
-        markerRepository = MarkerRepository(markerDao)
-
         viewModel = ViewModelProvider(
             this,
-            MapsViewModelFactory(markerRepository)
+            MapsViewModelFactory(application)
         )[MapsViewModel::class.java]
-        viewModel.markers.observe(this, Observer { markers ->
-            addSavedMarkersToMap(markers)
-        })
+        viewModel.markers.observe(this) { markers ->
+            viewModel.addSavedMarkersToMap(markers, map)
+        }
 
         binding.deleteButton.setOnClickListener {
-            clearMarkers()
+            viewModel.clearMarkers()
         }
 
         binding.centerButton.setOnClickListener {
-            viewModel.centerMapToUserLocation(map, userLocationMarker, defaultZoom)
+            viewModel.centerMapToUserLocation(map, userLocationMarker)
         }
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         locationCallback = object : LocationCallback() {
-            override fun onLocationResult(locationResult: LocationResult?) {
-                locationResult?.lastLocation?.let { location ->
-                    showUserLocation(location)
-                }
+            override fun onLocationResult(locationResult: LocationResult) {
+                showUserLocation(locationResult.lastLocation)
             }
         }
 
@@ -96,7 +81,7 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         viewModel.getAllMarkers()
 
         map.setOnMapLongClickListener {
-            onMapLongClick(it)
+            viewModel.onMapLongClick(it, userLocationMarker, map)
         }
 
         if (ContextCompat.checkSelfPermission(
@@ -131,76 +116,6 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
                 ).show()
             }
         }
-    }
-
-    private fun onMapLongClick(latLng: LatLng) {
-        val latitude = latLng.latitude
-        val longitude = latLng.longitude
-
-        val userLocation = userLocationMarker?.position
-        val distance = userLocation?.let { viewModel.calculateDistance(latLng, it) }
-        val distanceSnippet =
-            distance?.let { "Distância: ${viewModel.convertMetersToKilometers(it)} km" } ?: ""
-
-        val markerOptions = MarkerOptions()
-            .position(latLng)
-            .title("Marcador")
-            .snippet("Latitude: $latitude, Longitude: $longitude\n$distanceSnippet")
-        val mapMarker = map.addMarker(markerOptions)
-        if (mapMarker != null) {
-            this.markers.add(mapMarker)
-            mapMarker.showInfoWindow()
-        }
-
-        val markerEntity = MarkerEntity(
-            latitude = latLng.latitude,
-            longitude = latLng.longitude,
-            distance = distance ?: 0f
-        )
-        viewModel.insertMarker(markerEntity)
-    }
-
-    private fun addSavedMarkersToMap(markers: List<MarkerEntity>) {
-        for (marker in markers) {
-            val latLng = LatLng(marker.latitude, marker.longitude)
-            val distanceSnippet = "Distância: ${viewModel.convertMetersToKilometers(marker.distance)} km"
-            val markerOptions = MarkerOptions()
-                .position(latLng)
-                .title("Marcador")
-                .snippet(
-                    "Latitude: ${latLng.latitude}, Longitude: ${latLng.longitude}\n$distanceSnippet"
-                )
-            val mapMarker = map.addMarker(markerOptions)
-            if (mapMarker != null) {
-                this.markers.add(mapMarker)
-            }
-        }
-    }
-
-    private fun enableMyLocation() {
-        if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            map.isMyLocationEnabled = true
-            viewModel.startLocationUpdates(fusedLocationClient, locationCallback)
-        }
-    }
-
-    private fun showUserLocation(location: Location) {
-        val latLng = LatLng(location.latitude, location.longitude)
-
-        if (userLocationMarker == null) {
-            val markerOptions = MarkerOptions()
-                .position(latLng)
-                .title("Localização atual")
-            userLocationMarker = map.addMarker(markerOptions)
-        } else {
-            userLocationMarker?.position = latLng
-        }
-
-        map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, defaultZoom))
     }
 
     private inner class MarkerInfoWindowAdapter : GoogleMap.InfoWindowAdapter {
@@ -242,14 +157,30 @@ class MapsActivity : AppCompatActivity(), OnMapReadyCallback {
         }
     }
 
-
-    private fun clearMarkers() {
-        for (marker in markers) {
-            marker.remove()
+    private fun enableMyLocation() {
+        if (ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            map.isMyLocationEnabled = true
+            viewModel.startLocationUpdates(fusedLocationClient, locationCallback)
         }
-        markers.clear()
+    }
 
-        viewModel.deleteAllMarkers()
+    private fun showUserLocation(location: Location) {
+        val latLng = LatLng(location.latitude, location.longitude)
+
+        if (userLocationMarker == null) {
+            val markerOptions = MarkerOptions()
+                .position(latLng)
+                .title("Localização atual")
+            userLocationMarker = map.addMarker(markerOptions)
+        } else {
+            userLocationMarker?.position = latLng
+        }
+
+        map.animateCamera(CameraUpdateFactory.newLatLngZoom(latLng, 15f))
     }
 
     companion object {
