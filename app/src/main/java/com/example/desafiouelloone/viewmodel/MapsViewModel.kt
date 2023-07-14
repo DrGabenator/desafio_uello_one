@@ -61,7 +61,7 @@ class MapsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun insertMarker(marker: MarkerEntity) {
+    private fun insertMarker(marker: MarkerEntity) {
         viewModelScope.launch {
             try {
                 markerRepository.insertMarker(marker)
@@ -70,7 +70,7 @@ class MapsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteAllMarkers() {
+    private fun deleteAllMarkers() {
         viewModelScope.launch {
             try {
                 markerRepository.deleteAllMarkers()
